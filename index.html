@@ -15,6 +15,8 @@
 }
 *{box-sizing:border-box}
 html,body{height:100%}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+button{-webkit-appearance:none;touch-action:manipulation}
 body{margin:0;background:var(--lav);color:var(--ink);font-family:var(--font-ui);overflow:hidden;-webkit-tap-highlight-color:transparent;transition:background .4s}
 button{font:inherit;color:inherit;cursor:pointer}
 button:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
@@ -251,6 +253,9 @@ button:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
 .bd-photo{left:31%;top:19%;width:29%;z-index:3}
 .screen.on .bd-photo{animation:popin .9s cubic-bezier(.3,1.6,.5,1) .15s both}
 .cutout{aspect-ratio:1/1.1;border:7px solid #fff;border-radius:46% 54% 40% 60%/50% 44% 56% 50%;overflow:hidden;box-shadow:0 8px 16px rgba(50,25,110,.3);transform:rotate(2deg)}
+/* iOS WebKit: a child's height:100% inside an aspect-ratio box can resolve to 0, so pin photos absolutely */
+.strip .cell,.pol .cell,.cutout{position:relative}
+.strip .cell>.ph,.pol .cell>.ph,.cutout>.ph{position:absolute;top:0;left:0;right:0;bottom:0;width:100%;height:100%}
 .bd-bal{left:0;bottom:-1%;width:26%;z-index:3}
 .screen.on .bd-bal{animation:popin .9s cubic-bezier(.3,1.6,.5,1) .35s both}
 .bd-bal svg,.bd-hat svg,.bd-disco svg{width:100%;height:auto;display:block;overflow:visible}
@@ -566,6 +571,32 @@ const CONFIG = { passcode: '1234', day: 29, hint: '', photos: ['data:image/jpeg;
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+
+
+/* ---------- compatibility: browsers without CSS aspect-ratio (older iPhones, old Android WebViews) ---------- */
+const NO_AR = !(window.CSS && CSS.supports && CSS.supports('aspect-ratio', '1')) || /[?&]ar=1/.test(location.search);
+const AR = [['.scallop', 1], ['.key', 1], ['.note', 1], ['.strip .cell', 4 / 5], ['.pol .cell', 1 / 1.1], ['.cutout', 1 / 1.1], ['.frame', 1], ['.seal', 1], ['.bd', 1000 / 600], ['.bd-disco', 260 / 300]];
+if (NO_AR) {
+  const st = document.createElement('style');
+  st.textContent = AR.map(a => a[0] + '{aspect-ratio:auto!important}').join('');
+  document.head.appendChild(st);
+}
+function fixAspect() {
+  if (!NO_AR) return;
+  AR.forEach(([sel, r]) => document.querySelectorAll(sel).forEach(el => {
+    el.style.height = '';
+    const w = el.offsetWidth;
+    if (w) el.style.height = (w / r) + 'px';
+  }));
+}
+
+/* ---------- compatibility: older iPhones / in-app browsers without container units (cqw, cqh) ---------- */
+const NO_CQ = !(window.CSS && CSS.supports && CSS.supports('width', '1cqw')) || /[?&]cq=1/.test(location.search);
+if (NO_CQ) {
+  const cv = t => t.replace(/(-?\d*\.?\d+)cqw/g, 'calc($1 * var(--cw))').replace(/(-?\d*\.?\d+)cqh/g, 'calc($1 * var(--ch))');
+  document.querySelectorAll('style').forEach(st => { st.textContent = cv(st.textContent); });
+  document.querySelectorAll('[style*="cq"]').forEach(el => el.setAttribute('style', cv(el.getAttribute('style'))));
+}
 
 /* ---------- halftone sketch cats ---------- */
 function furStrokes(seed, n, avoid) {
@@ -913,8 +944,8 @@ function drawWavy(el) {
   svg.setAttribute('viewBox', `${-pad} ${-pad} ${w + pad * 2} ${h + pad * 2}`);
   svg.firstChild.setAttribute('d', wavyPath(w, h, r, A, wl));
 }
-const ro = new ResizeObserver(entries => entries.forEach(e => drawWavy(e.target)));
-$$('.wavy').forEach(el => { ro.observe(el); drawWavy(el); });
+const ro = window.ResizeObserver ? new ResizeObserver(entries => entries.forEach(e => drawWavy(e.target))) : null;
+$$('.wavy').forEach(el => { if (ro) ro.observe(el); drawWavy(el); });
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => $$('.wavy').forEach(drawWavy));
 
 /* ---------- small birthday stickers ---------- */
@@ -948,13 +979,20 @@ function fit() {
   const k = Math.min(A / 1100, B / 680);
   const sw = Math.max(1100, Math.round(A / k));
   stage.style.width = sw + 'px';
+  stage.style.setProperty('--cw', sw / 100 + 'px'); stage.style.setProperty('--ch', '6.8px');
+  const bdEl = document.querySelector('.bd'); if (bdEl && bdEl.offsetWidth) bdEl.style.setProperty('--cw', bdEl.offsetWidth / 100 + 'px');
   stage.style.left = '0px'; stage.style.top = '0px';
   stage.style.transform = `translate(${W / 2}px,${H / 2}px) ${portrait ? 'rotate(90deg) ' : ''}scale(${k}) translate(${-sw / 2}px,-340px)`;
   rh.hidden = true;
+  fixAspect(); requestAnimationFrame(fixAspect);
 }
 rh.addEventListener('click', () => { rh.dataset.off = '1'; rh.hidden = true; });
 addEventListener('resize', fit);
+addEventListener('orientationchange', () => setTimeout(fit, 250));
+if (window.visualViewport) visualViewport.addEventListener('resize', fit);
+addEventListener('load', () => { fit(); setTimeout(fit, 400); setTimeout(fit, 1500); });
 fit();
+setTimeout(fit, 100);
 
 /* ---------- sparkles ---------- */
 $$('.sky, #s-bday').forEach(sc => {
@@ -1105,7 +1143,7 @@ function go(id) {
   if (id === 'cal') {
     burst();
   }
-  requestAnimationFrame(() => $$('.wavy').forEach(drawWavy));
+  requestAnimationFrame(() => { fixAspect(); $$('.wavy').forEach(drawWavy); });
 }
 let opening = false;
 document.addEventListener('click', e => {
